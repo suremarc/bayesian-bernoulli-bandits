@@ -50,17 +50,16 @@ impl<const K: usize> State<K> {
 }
 
 #[derive(Debug, Clone)]
-pub struct Belief<const N: usize> {
-    pub state: Box<State<N>>,
+pub struct Belief<'a, const N: usize> {
+    pub state: &'a State<N>,
     r: ThreadRng,
     pub dist: [Beta; N],
 }
 
-impl<const K: usize> Belief<K> {
-    pub fn new(r: ThreadRng, prior: Beta) -> Self {
-        let state = State::new_rand(r.clone());
+impl<'a, const K: usize> Belief<'a, K> {
+    pub fn new(state: &'a State<K>, r: ThreadRng, prior: Beta) -> Self {
         Belief {
-            state: Box::new(state),
+            state,
             r,
             dist: [prior; K],
         }
@@ -89,11 +88,16 @@ impl<const K: usize> Belief<K> {
 
         let mut best: f64 = f64::MIN;
         for action in 0..K {
-            let result = self.expected_reward(action)
-                + self.bellman_recurse(&mut actions[1..], &mut outcomes[1..]);
-            if result > best {
+            let p = self.expected_reward(action);
+            let mut expected_reward = p;
+            for (outcome, prob) in [(false, 1. - p), (true, p)] {
+                let mut cl = (*self).clone();
+                cl.posterior(action, outcome);
+                expected_reward += prob * cl.bellman_recurse(&mut actions[1..], &mut outcomes[1..]);
+            }
+            if expected_reward > best {
                 actions[0] = action;
-                best = result;
+                best = expected_reward;
             }
         }
 
@@ -112,21 +116,23 @@ impl<const K: usize> Belief<K> {
 }
 
 fn main() {
-    let mut r = ThreadRng::default();
-    let mut belief = Belief::<4>::new(
-        r.clone(),
-        Beta {
-            alpha: 1.,
-            beta: 1.,
-        },
-    );
-
-    println!("{:#?}", belief.state.p);
+    let r = ThreadRng::default();
+    let state = State::new_rand(r.clone());
+    println!("{:#?}", state.p);
 
     let mut average_score: f64 = 0.;
     const I: usize = 1000;
     const N: usize = 10;
     for i in 0..I {
+        let mut belief = Belief::<2>::new(
+            &state,
+            r.clone(),
+            Beta {
+                alpha: 1.,
+                beta: 1.,
+            },
+        );
+
         let mut score = 0;
         for n in 0..N {
             let a = belief.best(N - n);
@@ -142,16 +148,15 @@ fn main() {
     average_score /= I as f64;
 
     println!("{average_score}");
-    println!(
-        "{:#?}",
-        belief
-            .state
-            .p
-            .as_ref()
-            .iter()
-            .map(|&p| 1. / ((I * N) as f64 * p * (1. - p)).sqrt())
-            .collect::<Vec<f64>>()
-    )
+    // println!(
+    //     "{:#?}",
+    //     state
+    //         .p
+    //         .as_ref()
+    //         .iter()
+    //         .map(|&p| 1. / ((I * N) as f64 * p * (1. - p)).sqrt())
+    //         .collect::<Vec<f64>>()
+    // )
 
     // let mut sum = 0.;
     // const N: usize = 1000;
