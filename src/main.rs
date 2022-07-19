@@ -116,8 +116,8 @@ fn main() {
     let mut belief = Belief::<4>::new(
         r.clone(),
         Beta {
-            alpha: 0.5,
-            beta: 0.5,
+            alpha: 1.,
+            beta: 1.,
         },
     );
 
@@ -125,9 +125,9 @@ fn main() {
 
     let mut average_score: f64 = 0.;
     const I: usize = 1000;
+    const N: usize = 10;
     for i in 0..I {
         let mut score = 0;
-        const N: usize = 10;
         for n in 0..N {
             let a = belief.best(N - n);
             let outcome = belief.take(a);
@@ -142,6 +142,16 @@ fn main() {
     average_score /= I as f64;
 
     println!("{average_score}");
+    println!(
+        "{:#?}",
+        belief
+            .state
+            .p
+            .as_ref()
+            .iter()
+            .map(|&p| 1. / ((I * N) as f64 * p * (1. - p)).sqrt())
+            .collect::<Vec<f64>>()
+    )
 
     // let mut sum = 0.;
     // const N: usize = 1000;
