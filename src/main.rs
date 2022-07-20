@@ -1,17 +1,16 @@
-use rand::{
-    distributions::Bernoulli,
-    prelude::{Distribution, ThreadRng},
-    Rng,
-};
+use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Copy)]
+use ordered_float::OrderedFloat;
+use rand::{distributions::Bernoulli, prelude::ThreadRng, Rng};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Beta {
-    pub alpha: f64,
-    pub beta: f64,
+    pub alpha: OrderedFloat<f64>,
+    pub beta: OrderedFloat<f64>,
 }
 
 impl Beta {
-    pub fn posterior(mut self, outcome: bool) -> Self {
+    fn posterior(mut self, outcome: bool) -> Self {
         if outcome {
             self.alpha += 1.;
         } else {
@@ -21,8 +20,8 @@ impl Beta {
         self
     }
 
-    pub fn mean(self) -> f64 {
-        self.alpha / (self.alpha + self.beta)
+    fn mean(self) -> f64 {
+        self.alpha.0 / (self.alpha.0 + self.beta.0)
     }
 }
 
@@ -50,10 +49,10 @@ impl<const K: usize> State<K> {
 }
 
 #[derive(Debug, Clone)]
-pub struct Belief<'a, const N: usize> {
-    pub state: &'a State<N>,
+pub struct Belief<'a, const K: usize> {
+    pub state: &'a State<K>,
     r: ThreadRng,
-    pub dist: [Beta; N],
+    pub dist: [Beta; K],
 }
 
 impl<'a, const K: usize> Belief<'a, K> {
@@ -77,41 +76,55 @@ impl<'a, const K: usize> Belief<'a, K> {
         outcome
     }
 
-    pub fn expected_reward(&self, action: usize) -> f64 {
-        self.dist[action].mean()
-    }
-
-    fn bellman_recurse(&self, actions: &mut [usize], outcomes: &mut [bool]) -> f64 {
-        if actions.is_empty() {
+    fn bellman_recurse(
+        dist: &mut [Beta; K],
+        n: usize,
+        memoized: &mut BTreeMap<[Beta; K], (usize, f64)>,
+    ) -> f64 {
+        if n == 0 {
             return 0.;
         }
 
-        let mut best: f64 = f64::MIN;
-        for action in 0..K {
-            let p = self.expected_reward(action);
-            let mut expected_reward = p;
-            for (outcome, prob) in [(false, 1. - p), (true, p)] {
-                let mut cl = (*self).clone();
-                cl.posterior(action, outcome);
-                expected_reward += prob * cl.bellman_recurse(&mut actions[1..], &mut outcomes[1..]);
-            }
-            if expected_reward > best {
-                actions[0] = action;
-                best = expected_reward;
+        match memoized.get(dist) {
+            Some(&(_, reward)) => reward,
+            None => {
+                // println!("1");
+                let mut best = f64::MIN;
+                let mut best_action = 0_usize;
+                for action in 0..K {
+                    let p_success = dist[action].mean();
+                    let mut reward = p_success;
+                    for (outcome, prob) in [(true, p_success), (false, 1. - p_success)] {
+                        let mut dist = *dist;
+                        dist[action] = dist[action].posterior(outcome);
+                        reward += prob * Self::bellman_recurse(&mut dist, n - 1, memoized);
+                    }
+
+                    if reward > best {
+                        best = reward;
+                        best_action = action;
+                    }
+                }
+
+                memoized.insert(*dist, (best_action, best));
+                best
             }
         }
-
-        best
     }
 
-    pub fn best(&self, n: usize) -> usize {
-        let s0 = (*self).clone();
-        let mut actions: Vec<usize> = vec![0; n];
-        let mut outcomes: Vec<bool> = vec![false; n];
+    pub fn best(&mut self, n: usize) -> Option<usize> {
+        let mut memoized: BTreeMap<[Beta; K], (usize, f64)> = BTreeMap::new();
+        let t0 = std::time::Instant::now();
+        let mut dist = self.dist;
+        Self::bellman_recurse(&mut dist, n, &mut memoized);
+        println!(
+            "# of states: {} ({}ms)",
+            memoized.len(),
+            t0.elapsed().as_millis()
+        );
 
-        s0.bellman_recurse(actions.as_mut_slice(), outcomes.as_mut_slice());
-
-        actions[0]
+        // backtrack
+        memoized.get(&self.dist).map(|&(action, _)| action)
     }
 }
 
@@ -121,25 +134,25 @@ fn main() {
     println!("{:#?}", state.p);
 
     let mut average_score: f64 = 0.;
-    const I: usize = 1000;
-    const N: usize = 10;
+    const I: usize = 1;
+    const N: usize = 100;
     for i in 0..I {
         let mut belief = Belief::<2>::new(
             &state,
             r.clone(),
             Beta {
-                alpha: 1.,
-                beta: 1.,
+                alpha: OrderedFloat(1.),
+                beta: OrderedFloat(1.),
             },
         );
 
         let mut score = 0;
         for n in 0..N {
-            let a = belief.best(N - n);
+            let a = belief.best(N - n).unwrap();
             let outcome = belief.take(a);
             score += outcome as u64;
             if i == 0 {
-                println!("{a} -> {outcome} ({score})");
+                println!("{n}: {a} -> {outcome} ({score})");
             }
         }
 
