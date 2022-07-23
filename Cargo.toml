@@ -7,5 +7,5 @@ edition = "2021"
 
 [dependencies]
 rand = "0.8"
-ordered-float = { version = "3.0.0", features = ["rand"] }
 num-integer = "0.1"
+num-bigint = "0.4"
