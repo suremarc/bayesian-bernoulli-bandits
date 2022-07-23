@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use ordered_float::OrderedFloat;
 use rand::{distributions::Bernoulli, prelude::ThreadRng, Rng};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Beta {
     pub alpha: OrderedFloat<f64>,
     pub beta: OrderedFloat<f64>,
@@ -77,7 +77,7 @@ impl<'a, const K: usize> Belief<'a, K> {
     }
 
     fn bellman_recurse(
-        dist: &mut [Beta; K],
+        dist: &[Beta; K],
         n: usize,
         memoized: &mut BTreeMap<[Beta; K], (usize, f64)>,
     ) -> f64 {
@@ -97,7 +97,7 @@ impl<'a, const K: usize> Belief<'a, K> {
                     for (outcome, prob) in [(true, p_success), (false, 1. - p_success)] {
                         let mut dist = *dist;
                         dist[action] = dist[action].posterior(outcome);
-                        reward += prob * Self::bellman_recurse(&mut dist, n - 1, memoized);
+                        reward += prob * Self::bellman_recurse(&dist, n - 1, memoized);
                     }
 
                     if reward > best {
@@ -112,18 +112,17 @@ impl<'a, const K: usize> Belief<'a, K> {
         }
     }
 
-    pub fn best(&mut self, n: usize) -> Option<usize> {
+    pub fn best(&self, n: usize) -> Option<usize> {
         let mut memoized: BTreeMap<[Beta; K], (usize, f64)> = BTreeMap::new();
-        let t0 = std::time::Instant::now();
-        let mut dist = self.dist;
-        Self::bellman_recurse(&mut dist, n, &mut memoized);
-        println!(
-            "# of states: {} ({}ms)",
-            memoized.len(),
-            t0.elapsed().as_millis()
-        );
+        self.best_with_memoized(n, &mut memoized)
+    }
 
-        // backtrack
+    pub fn best_with_memoized(
+        &self,
+        n: usize,
+        memoized: &mut BTreeMap<[Beta; K], (usize, f64)>,
+    ) -> Option<usize> {
+        Self::bellman_recurse(&self.dist, n, memoized);
         memoized.get(&self.dist).map(|&(action, _)| action)
     }
 }
@@ -131,13 +130,13 @@ impl<'a, const K: usize> Belief<'a, K> {
 fn main() {
     let r = ThreadRng::default();
     let state = State::new_rand(r.clone());
-    println!("{:#?}", state.p);
+    eprintln!("{:#?}", state.p);
 
     let mut average_score: f64 = 0.;
     const I: usize = 1;
-    const N: usize = 100;
+    const N: usize = 50;
     for i in 0..I {
-        let mut belief = Belief::<2>::new(
+        let mut belief = Belief::<3>::new(
             &state,
             r.clone(),
             Beta {
@@ -146,21 +145,30 @@ fn main() {
             },
         );
 
+        let mut memoized = BTreeMap::new();
+        let t0 = std::time::Instant::now();
+
         let mut score = 0;
         for n in 0..N {
-            let a = belief.best(N - n).unwrap();
+            let a = belief.best_with_memoized(N - n, &mut memoized).unwrap();
             let outcome = belief.take(a);
             score += outcome as u64;
             if i == 0 {
-                println!("{n}: {a} -> {outcome} ({score})");
+                eprintln!("{n}: {a} -> {outcome} ({score})");
             }
         }
+
+        eprintln!(
+            "# of states: {} ({}ms)",
+            memoized.len(),
+            t0.elapsed().as_millis()
+        );
 
         average_score += score as f64;
     }
     average_score /= I as f64;
 
-    println!("{average_score}");
+    eprintln!("{average_score}");
     // println!(
     //     "{:#?}",
     //     state
