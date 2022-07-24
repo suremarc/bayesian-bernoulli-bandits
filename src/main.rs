@@ -1,3 +1,4 @@
+use num_bigint::BigUint;
 use ordered_float::OrderedFloat;
 use rand::{distributions::Bernoulli, prelude::ThreadRng, Rng};
 use std::collections::BTreeMap;
@@ -24,6 +25,53 @@ impl Beta {
     fn mean(self, alpha: f64, beta: f64) -> f64 {
         (alpha + self.successes as f64) / ((self.successes + self.failures) as f64 + alpha + beta)
     }
+}
+
+fn compositions_recurse<const K: usize>(entries: &mut Vec<[u8; K]>, n: u8, k: u8) {
+    if n == 0 {
+        return;
+    }
+
+    if k == 1 {
+        let mut entry = [0; K];
+        entry[0] = n;
+        entries.push(entry);
+        return;
+    }
+
+    let current_len = entries.len();
+    compositions_recurse::<K>(entries, n - 1, k);
+    for x in entries[current_len..].iter_mut() {
+        x[(k - 1) as usize] += 1;
+    }
+
+    let current_len = entries.len();
+    compositions_recurse::<K>(entries, n - 1, k - 1);
+    for x in entries[current_len..].iter_mut() {
+        x[(k - 1) as usize] = 1;
+    }
+}
+
+pub fn compositions_count<const K: usize>(n: u8) -> usize {
+    num_integer::binomial(BigUint::from(n as usize - 1), BigUint::from(K - 1))
+        .try_into()
+        .unwrap()
+}
+
+pub fn compositions<const K: usize>(n: u8) -> Vec<[u8; K]> {
+    let mut entries = Vec::with_capacity(compositions_count::<K>(n));
+    compositions_recurse::<K>(&mut entries, n, K.try_into().unwrap());
+
+    entries
+}
+
+pub fn weak_compositions<const K: usize>(n: u8) -> Vec<[u8; K]> {
+    let mut result = compositions::<K>(n + u8::try_from(K).unwrap());
+    for entry in result.iter_mut() {
+        *entry = entry.map(|x| x - 1);
+    }
+
+    result
 }
 
 #[derive(Debug, Clone)]
