@@ -2,11 +2,14 @@
 #![feature(slice_as_chunks)]
 
 use num_bigint::BigUint;
-use num_integer::Integer;
 use num_traits::PrimInt;
 use ordered_float::OrderedFloat;
-use rand::{distributions::Bernoulli, prelude::ThreadRng, Rng};
-use std::{collections::BTreeMap, ops::AddAssign};
+use rand::{
+    distributions::Bernoulli,
+    prelude::{Distribution, ThreadRng},
+    Rng,
+};
+use std::{borrow::Borrow, collections::BTreeMap, ops::AddAssign};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Observations<I: PrimInt + AddAssign> {
@@ -85,7 +88,7 @@ where
     I: Into<BigUint>,
     I: Into<usize>,
 {
-    let mut entries = Vec::with_capacity(compositions_count::<I, K>(n.try_into().unwrap()));
+    let mut entries = Vec::with_capacity(compositions_count::<I, K>(n));
     compositions_recurse::<I, K>(&mut entries, n, I::from(K).unwrap());
 
     entries
@@ -148,12 +151,12 @@ where
 
 #[derive(Debug, Clone)]
 pub struct State<const K: usize> {
-    p: [f64; K],
+    pub p: [f64; K],
     dist: [Bernoulli; K],
 }
 
 impl<const K: usize> State<K> {
-    pub fn new_rand(mut r: ThreadRng) -> State<K> {
+    pub fn new_rand(r: &mut ThreadRng) -> State<K> {
         let p: [f64; K] = (0..K)
             .map(|_| r.gen_range(0.0..1.0))
             .collect::<Vec<f64>>()
@@ -169,34 +172,130 @@ impl<const K: usize> State<K> {
     }
 }
 
-pub struct Params<const K: usize> {
-    state: State<K>,
-    alpha: f64,
-    beta: f64,
+#[derive(Debug, Clone, Copy)]
+pub struct Params {
+    pub alpha: f64,
+    pub beta: f64,
 }
 
-pub struct Belief<'a, I: PrimInt + AddAssign, const K: usize> {
-    params: &'a Params<K>,
-    dist: [Observations<I>; K],
-}
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Belief<I: PrimInt + AddAssign, const K: usize>(pub [Observations<I>; K]);
 
-impl<'a, I: PrimInt + AddAssign, const K: usize> Belief<'a, I, K>
+impl<I: PrimInt + AddAssign, const K: usize> Belief<I, K>
 where
     I: Into<f64>,
 {
-    pub fn new(params: &'a Params<K>) -> Self {
-        Self {
-            params,
-            dist: [Default::default(); K],
-        }
+    pub fn take(&mut self, action: usize, state: &State<K>, r: &mut ThreadRng) -> bool {
+        let outcome = state.dist[action].sample(r);
+        self.0[action] = self.0[action].update(outcome);
+        outcome
     }
 
     #[inline(always)]
-    fn immediate_reward(&self, action: usize) -> f64 {
-        let dist = self.dist[action];
-        (self.params.alpha + dist.successes.into())
-            / ((dist.successes + dist.failures).into() + self.params.alpha + self.params.beta)
+    fn success_chance(&self, action: usize, params: Params) -> f64 {
+        let dist = self.0[action];
+        (params.alpha + dist.successes.into())
+            / ((dist.successes + dist.failures).into() + params.alpha + params.beta)
+    }
+
+    #[inline]
+    fn possible_transitions(&self, action: usize, params: Params) -> [(f64, Self); 2] {
+        let p = self.success_chance(action, params);
+        [(true, p), (false, 1. - p)].map(|(outcome, prob)| {
+            let mut new = self.clone();
+            new.0[action] = new.0[action].update(outcome);
+            (prob, new)
+        })
+    }
+
+    pub fn value_iteration(&self, n: I, epsilon: f64, params: Params) -> BTreeMap<Self, f64>
+    where
+        [(); K * 2]:,
+        I: Into<BigUint>,
+        I: Into<usize>,
+        I: std::fmt::Debug,
+    {
+        let states = enumerate_observations::<I, K>(n)
+            .into_iter()
+            .map(|state| Self(state))
+            .collect::<Vec<_>>();
+        let mut value: BTreeMap<&Self, f64> = states.iter().map(|state| (state, 0.)).collect();
+
+        let mut delta: f64 = 1.;
+        loop {
+            for state in states.iter() {
+                let new_reward = self.best_action_and_reward(&value, params).1;
+
+                let old_reward = value.insert(state, new_reward).unwrap();
+                delta = delta.max((new_reward - old_reward).abs());
+            }
+
+            if delta < epsilon {
+                break;
+            }
+        }
+
+        value
+            .into_iter()
+            .map(|(belief, reward)| (belief.clone(), reward))
+            .collect()
+    }
+
+    fn best_action_and_reward<T>(&self, value: &BTreeMap<T, f64>, params: Params) -> (usize, f64)
+    where
+        T: Borrow<Self> + Ord,
+        I: std::fmt::Debug,
+    {
+        (0..K)
+            .map(|action| {
+                (
+                    action,
+                    self.success_chance(action, params)
+                        + self
+                            .possible_transitions(action, params)
+                            .map(|(prob, new_state)| {
+                                println!("{new_state:#?}");
+                                prob * *value.get(new_state.borrow()).unwrap()
+                            })
+                            .iter()
+                            .sum::<f64>(),
+                )
+            })
+            .max_by_key(|&(_, reward)| OrderedFloat::from(reward))
+            .unwrap()
     }
 }
 
-fn main() {}
+fn main() {
+    const K: usize = 2;
+    const N: u8 = 10;
+
+    let mut r = ThreadRng::default();
+    let state = State::<K>::new_rand(&mut r);
+    let params = Params {
+        alpha: 1.,
+        beta: 1.,
+    };
+
+    let mut belief = Belief::<u8, K>([Default::default(); K]);
+
+    let t0 = std::time::Instant::now();
+    let value = belief.value_iteration(N, 1., params);
+
+    let mut score = 0;
+    for n in 0..N {
+        let (action, expected_reward) = belief.best_action_and_reward(&value, params);
+
+        let expected_score = score as f64 + expected_reward;
+        let outcome = belief.take(action, &state, &mut r);
+        score += outcome as u64;
+        eprintln!("{n}: ({action}, {expected_score:.2}) -> {outcome} ({score})");
+    }
+
+    eprintln!(
+        "# of states: {} ({}ms)",
+        value.len(),
+        // value.len(),
+        t0.elapsed().as_millis()
+    );
+}
