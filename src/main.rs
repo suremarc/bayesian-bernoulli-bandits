@@ -162,7 +162,8 @@ impl<'a, const K: usize> Belief<'a, K> {
         outcome
     }
 
-    pub fn expected_reward<F>(&self, action: usize, mut lookahead: F) -> f64
+    #[inline(always)]
+    fn expected_reward<F>(&self, action: usize, mut lookahead: F) -> f64
     where
         F: FnMut(&[Beta; K]) -> f64,
     {
@@ -170,7 +171,6 @@ impl<'a, const K: usize> Belief<'a, K> {
         let mut reward = p_success;
         for (outcome, prob) in [(true, p_success), (false, 1. - p_success)] {
             let mut dist = self.dist;
-            // println!("{dist:#?}");
             dist[action] = dist[action].posterior(outcome);
             reward += prob * lookahead(&dist);
         }
@@ -277,30 +277,31 @@ fn main() {
 
     let mut average_score: f64 = 0.;
     const I: usize = 1;
-    const N: usize = 3;
+    const N: usize = 10;
     for i in 0..I {
         let mut belief = Belief::<2>::new(&state, r.clone(), 1., 1.);
 
-        // let mut memoized = BTreeMap::new();
-        let value = belief.value_iterate(N, 1.);
+        let mut memoized = BTreeMap::new();
+        // let value = belief.value_iterate(N, 1.);
         let t0 = std::time::Instant::now();
 
         let mut score = 0;
         for n in 0..N {
-            // let (a, expected_reward) = belief.best_with_memoized(N - n, &mut memoized).unwrap();
-            let a = belief.best_action(&value);
-            // let expected_score = score as f64 + expected_reward;
+            let (a, expected_reward) = belief.best_with_memoized(N - n, &mut memoized).unwrap();
+            // let a = belief.best_action(&value);
+            let expected_score = score as f64 + expected_reward;
             let outcome = belief.take(a);
             score += outcome as u64;
-            // if i == 0 {
-            //     eprintln!("{n}: ({a}, {expected_score:.2}) -> {outcome} ({score})");
-            // }
+            if i == 0 {
+                eprintln!("{n}: ({a}, {expected_score:.2}) -> {outcome} ({score})");
+            }
         }
 
         if i == 0 {
             eprintln!(
                 "# of states: {} ({}ms)",
-                value.len(),
+                memoized.len(),
+                // value.len(),
                 t0.elapsed().as_millis()
             );
         }
