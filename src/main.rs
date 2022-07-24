@@ -37,6 +37,11 @@ impl<I: PrimInt + AddAssign> Observations<I> {
 
         self
     }
+
+    #[inline(always)]
+    fn n(self) -> I {
+        self.successes + self.failures
+    }
 }
 
 fn compositions_recurse<I: PrimInt + AddAssign, const K: usize>(
@@ -135,14 +140,14 @@ where
 }
 
 pub fn enumerate_observations_recursive<I: PrimInt + AddAssign, const K: usize>(
-    n: usize,
+    n: I,
 ) -> Vec<[Observations<I>; K]>
 where
     [(); K * 2]:,
     I: Into<BigUint>,
     I: Into<usize>,
 {
-    (0..=n)
+    (0..=n.into())
         .rev()
         .map(|n| I::from(n).unwrap())
         .flat_map(enumerate_observations::<I, K>)
@@ -191,6 +196,15 @@ where
         outcome
     }
 
+    fn n(&self) -> I {
+        let mut sum = I::zero();
+        for obs in self.0 {
+            sum += obs.n();
+        }
+
+        sum
+    }
+
     #[inline(always)]
     fn success_chance(&self, action: usize, params: Params) -> f64 {
         let dist = self.0[action];
@@ -208,26 +222,35 @@ where
         })
     }
 
-    pub fn value_iteration(&self, n: I, epsilon: f64, params: Params) -> BTreeMap<Self, f64>
+    pub fn value_iteration(n: I, epsilon: f64, params: Params) -> BTreeMap<Self, f64>
     where
         [(); K * 2]:,
         I: Into<BigUint>,
         I: Into<usize>,
-        I: std::fmt::Debug,
+        I: std::fmt::Debug + std::fmt::Display,
     {
-        let states = enumerate_observations::<I, K>(n)
+        let states = enumerate_observations_recursive::<I, K>(n)
             .into_iter()
             .map(|state| Self(state))
             .collect::<Vec<_>>();
         let mut value: BTreeMap<&Self, f64> = states.iter().map(|state| (state, 0.)).collect();
 
-        let mut delta: f64 = 1.;
         loop {
+            let mut delta: f64 = 0.;
             for state in states.iter() {
-                let new_reward = self.best_action_and_reward(&value, params).1;
+                // println!("state ({}): {state:#?}\n{value:#?}", state.n());
+                // println!(
+                //     "{:?}",
+                //     value.iter().map(|(_, &reward)| reward).collect::<Vec<_>>()
+                // );
+                let mut new_reward = 0.;
+                if n == state.n() {
+                    new_reward += state.q(&value, params).1;
+                }
 
                 let old_reward = value.insert(state, new_reward).unwrap();
                 delta = delta.max((new_reward - old_reward).abs());
+                // println!("{delta}");
             }
 
             if delta < epsilon {
@@ -241,10 +264,10 @@ where
             .collect()
     }
 
-    fn best_action_and_reward<T>(&self, value: &BTreeMap<T, f64>, params: Params) -> (usize, f64)
+    fn q<T>(&self, value: &BTreeMap<T, f64>, params: Params) -> (usize, f64)
     where
         T: Borrow<Self> + Ord,
-        I: std::fmt::Debug,
+        I: std::fmt::Debug + std::fmt::Display,
     {
         (0..K)
             .map(|action| {
@@ -254,8 +277,7 @@ where
                         + self
                             .possible_transitions(action, params)
                             .map(|(prob, new_state)| {
-                                println!("{new_state:#?}");
-                                prob * *value.get(new_state.borrow()).unwrap()
+                                prob * value.get(new_state.borrow()).copied().unwrap_or(0.)
                             })
                             .iter()
                             .sum::<f64>(),
@@ -267,11 +289,12 @@ where
 }
 
 fn main() {
-    const K: usize = 2;
-    const N: u8 = 10;
+    const K: usize = 4;
+    const N: u8 = 20;
 
     let mut r = ThreadRng::default();
     let state = State::<K>::new_rand(&mut r);
+    eprintln!("{:#?}", state.p);
     let params = Params {
         alpha: 1.,
         beta: 1.,
@@ -280,11 +303,11 @@ fn main() {
     let mut belief = Belief::<u8, K>([Default::default(); K]);
 
     let t0 = std::time::Instant::now();
-    let value = belief.value_iteration(N, 1., params);
+    let value = Belief::value_iteration(N, 5., params);
 
     let mut score = 0;
     for n in 0..N {
-        let (action, expected_reward) = belief.best_action_and_reward(&value, params);
+        let (action, expected_reward) = belief.q(&value, params);
 
         let expected_score = score as f64 + expected_reward;
         let outcome = belief.take(action, &state, &mut r);
@@ -293,9 +316,10 @@ fn main() {
     }
 
     eprintln!(
-        "# of states: {} ({}ms)",
+        "# of states: {} ({}ms)\n got {:.2}%",
         value.len(),
         // value.len(),
-        t0.elapsed().as_millis()
+        t0.elapsed().as_millis(),
+        score as f64 / (N as f64) * 100.,
     );
 }
