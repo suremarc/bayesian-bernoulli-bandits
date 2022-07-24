@@ -8,5 +8,6 @@ edition = "2021"
 [dependencies]
 rand = "0.8"
 num-integer = "0.1"
+num-traits = "0.2"
 num-bigint = "0.4"
 ordered-float = { version = "3.0.0", features = ["rand"] }
