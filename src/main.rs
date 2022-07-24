@@ -1,6 +1,3 @@
-#![feature(generic_const_exprs)]
-
-use num_bigint::BigUint;
 use rand::{distributions::Bernoulli, prelude::ThreadRng, Rng};
 use std::collections::BTreeMap;
 
@@ -26,44 +23,6 @@ impl Beta {
     fn mean(self, alpha: f64, beta: f64) -> f64 {
         (alpha + self.successes as f64) / ((self.successes + self.failures) as f64 + alpha + beta)
     }
-}
-
-fn compositions_recurse<const K: u8>(entries: &mut Vec<[u8; K as usize]>, n: u8, k: u8) {
-    if n == 0 {
-        return;
-    }
-
-    if k == 1 {
-        let mut entry = [0; K as usize];
-        entry[0] = n;
-        entries.push(entry);
-        return;
-    }
-
-    let current_len = entries.len();
-    compositions_recurse::<K>(entries, n - 1, k);
-    for x in entries[current_len..].iter_mut() {
-        x[(k - 1) as usize] += 1;
-    }
-
-    let current_len = entries.len();
-    compositions_recurse::<K>(entries, n - 1, k - 1);
-    for x in entries[current_len..].iter_mut() {
-        x[(k - 1) as usize] = 1;
-    }
-}
-
-pub fn compositions_count<const K: u8>(n: u8) -> usize {
-    num_integer::binomial(BigUint::from(n as usize - 1), BigUint::from(K as usize - 1))
-        .try_into()
-        .unwrap()
-}
-
-pub fn compositions<const K: u8>(n: u8) -> Vec<[u8; K as usize]> {
-    let mut entries = Vec::with_capacity(compositions_count::<K>(n));
-    compositions_recurse::<K>(&mut entries, n, K);
-
-    entries
 }
 
 #[derive(Debug, Clone)]
@@ -179,12 +138,9 @@ fn main() {
     let state = State::new_rand(r.clone());
     eprintln!("{:#?}", state.p);
 
-    eprintln!("{:?}", compositions_count::<3>(5));
-    eprintln!("{:?}", compositions::<3>(5));
-
     let mut average_score: f64 = 0.;
     const I: usize = 1;
-    const N: usize = 10;
+    const N: usize = 100;
     for i in 0..I {
         let mut belief = Belief::<2>::new(&state, r.clone(), 1., 1.);
 
