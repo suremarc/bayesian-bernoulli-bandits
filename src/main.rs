@@ -1,3 +1,4 @@
+use ordered_float::OrderedFloat;
 use rand::{distributions::Bernoulli, prelude::ThreadRng, Rng};
 use std::collections::BTreeMap;
 
@@ -95,25 +96,24 @@ impl<'a, const K: usize> Belief<'a, K> {
             Some(&(_, reward)) => reward,
             None => {
                 // println!("1");
-                let mut best = f64::MIN;
-                let mut best_action = 0_usize;
-                for action in 0..K {
-                    let p_success = dist[action].mean(alpha, beta);
-                    let mut reward = p_success;
-                    for (outcome, prob) in [(true, p_success), (false, 1. - p_success)] {
-                        let mut dist = *dist;
-                        dist[action] = dist[action].posterior(outcome);
-                        reward += prob * Self::bellman_recurse(alpha, beta, &dist, n - 1, memoized);
-                    }
+                let (best_action, reward) = (0..K)
+                    .map(|action| {
+                        let p_success = dist[action].mean(alpha, beta);
+                        let mut reward = p_success;
+                        for (outcome, prob) in [(true, p_success), (false, 1. - p_success)] {
+                            let mut dist = *dist;
+                            dist[action] = dist[action].posterior(outcome);
+                            reward +=
+                                prob * Self::bellman_recurse(alpha, beta, &dist, n - 1, memoized);
+                        }
 
-                    if reward > best {
-                        best = reward;
-                        best_action = action;
-                    }
-                }
+                        (action, reward)
+                    })
+                    .max_by_key(|&(_, reward)| OrderedFloat::from(reward))
+                    .unwrap();
 
-                memoized.insert(*dist, (best_action, best));
-                best
+                memoized.insert(*dist, (best_action, reward));
+                reward
             }
         }
     }
@@ -171,26 +171,4 @@ fn main() {
     average_score /= I as f64;
 
     eprintln!("{average_score}");
-    // println!(
-    //     "{:#?}",
-    //     state
-    //         .p
-    //         .as_ref()
-    //         .iter()
-    //         .map(|&p| 1. / ((I * N) as f64 * p * (1. - p)).sqrt())
-    //         .collect::<Vec<f64>>()
-    // )
-
-    // let mut sum = 0.;
-    // const N: usize = 1000;
-    // for _ in 0..N {
-    //     let realized_reward: u64 = actions
-    //         .iter()
-    //         .map(|&a| belief.state.dist[a].sample(&mut r) as u64)
-    //         .sum();
-    //     // println!("{}", realized_reward);
-    //     sum += realized_reward as f64;
-    // }
-    // sum /= N as f64;
-    // println!("average: {}", sum);
 }
