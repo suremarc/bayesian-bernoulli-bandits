@@ -221,7 +221,12 @@ where
         })
     }
 
-    pub fn value_iteration(n: I, epsilon: f64, params: Params) -> BTreeMap<Self, f64>
+    pub fn value_iteration(
+        n: I,
+        epsilon: f64,
+        params: Params,
+        orig: impl Fn(&Self) -> f64,
+    ) -> BTreeMap<Self, f64>
     where
         [(); K * 2]:,
         I: Into<BigUint>,
@@ -231,7 +236,8 @@ where
             .into_iter()
             .map(|state| Self(state))
             .collect::<Vec<_>>();
-        let mut value: BTreeMap<&Self, f64> = states.iter().map(|state| (state, 0.)).collect();
+        let mut value: BTreeMap<&Self, f64> =
+            states.iter().map(|state| (state, orig(state))).collect();
 
         loop {
             let mut delta: f64 = 0.;
@@ -295,10 +301,11 @@ where
         )
     }
 
-    fn best_action_with_lookahead<F>(&self, mut lookahead: F, params: Params) -> (usize, f64)
-    where
-        F: FnMut(&Self) -> f64,
-    {
+    fn best_action_with_lookahead(
+        &self,
+        mut lookahead: impl FnMut(&Self) -> f64,
+        params: Params,
+    ) -> (usize, f64) {
         (0..K)
             .map(|action| {
                 (
@@ -323,7 +330,7 @@ fn main() {
 
     let mut r = ThreadRng::default();
     let state = State::<K>::new_rand(&mut r);
-    // let state = State::<K>::new([0.11955076742693227, 0.14036044660466196]);
+    // let state = State::<K>::new([0.8341146271245636, 0.7968395308492424]);
     eprintln!("{:#?}", state.p);
     let params = Params {
         alpha: 1.,
@@ -333,8 +340,8 @@ fn main() {
     let mut belief = Belief::<Size, K>([Default::default(); K]);
 
     let t0 = std::time::Instant::now();
-    // let value = Belief::value_iteration(N, 5., params);
-    let value = belief.dynamic_search(N, params);
+    let value = Belief::value_iteration(N, 5., params, |_| 0.);
+    // let value = belief.dynamic_search(N, params);
 
     let mut score = 0;
     for n in 0..N {
