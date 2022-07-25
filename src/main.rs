@@ -227,7 +227,6 @@ where
         [(); K * 2]:,
         I: Into<BigUint>,
         I: Into<usize>,
-        I: std::fmt::Debug + std::fmt::Display,
     {
         let states = enumerate_observations_recursive::<I, K>(n)
             .into_iter()
@@ -238,11 +237,6 @@ where
         loop {
             let mut delta: f64 = 0.;
             for state in states.iter() {
-                // println!("state ({}): {state:#?}\n{value:#?}", state.n());
-                // println!(
-                //     "{:?}",
-                //     value.iter().map(|(_, &reward)| reward).collect::<Vec<_>>()
-                // );
                 let mut new_reward = 0.;
                 if n == state.n() {
                     new_reward += state.q(&value, params).1;
@@ -250,7 +244,6 @@ where
 
                 let old_reward = value.insert(state, new_reward).unwrap();
                 delta = delta.max((new_reward - old_reward).abs());
-                // println!("{delta}");
             }
 
             if delta < epsilon {
@@ -264,10 +257,48 @@ where
             .collect()
     }
 
+    fn dynamic_search_recurse(&self, n: I, params: Params, value: &mut BTreeMap<Self, f64>) -> f64 {
+        if n.is_zero() {
+            return 0.;
+        }
+
+        match value.get(self).copied() {
+            Some(reward) => reward,
+            None => {
+                let (_, reward) = self.q_with_lookahead(
+                    |new_belief| new_belief.dynamic_search_recurse(n - I::one(), params, value),
+                    params,
+                );
+
+                value.insert(self.clone(), reward);
+                reward
+            }
+        }
+    }
+
+    pub fn dynamic_search(&self, n: I, params: Params) -> BTreeMap<Self, f64>
+    where
+        I: Into<usize>,
+    {
+        let mut value = BTreeMap::new();
+        self.dynamic_search_recurse(n, params, &mut value);
+
+        value
+    }
+
     fn q<T>(&self, value: &BTreeMap<T, f64>, params: Params) -> (usize, f64)
     where
         T: Borrow<Self> + Ord,
-        I: std::fmt::Debug + std::fmt::Display,
+    {
+        self.q_with_lookahead(
+            |new_belief| value.get(new_belief.borrow()).copied().unwrap_or(0.),
+            params,
+        )
+    }
+
+    fn q_with_lookahead<F>(&self, mut lookahead: F, params: Params) -> (usize, f64)
+    where
+        F: FnMut(&Self) -> f64,
     {
         (0..K)
             .map(|action| {
@@ -276,9 +307,7 @@ where
                     self.success_chance(action, params)
                         + self
                             .possible_transitions(action, params)
-                            .map(|(prob, new_state)| {
-                                prob * value.get(new_state.borrow()).copied().unwrap_or(0.)
-                            })
+                            .map(|(prob, new_belief)| prob * lookahead(&new_belief))
                             .iter()
                             .sum::<f64>(),
                 )
@@ -289,8 +318,8 @@ where
 }
 
 fn main() {
-    const K: usize = 4;
-    const N: u8 = 20;
+    const K: usize = 2;
+    const N: u8 = 100;
 
     let mut r = ThreadRng::default();
     let state = State::<K>::new_rand(&mut r);
@@ -303,7 +332,8 @@ fn main() {
     let mut belief = Belief::<u8, K>([Default::default(); K]);
 
     let t0 = std::time::Instant::now();
-    let value = Belief::value_iteration(N, 5., params);
+    // let value = Belief::value_iteration(N, 5., params);
+    let value = belief.dynamic_search(N, params);
 
     let mut score = 0;
     for n in 0..N {
