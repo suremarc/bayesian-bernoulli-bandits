@@ -161,19 +161,18 @@ pub struct State<const K: usize> {
 }
 
 impl<const K: usize> State<K> {
-    pub fn new_rand(r: &mut ThreadRng) -> State<K> {
+    pub fn new(p: [f64; K]) -> Self {
+        let dist = p.map(|p| Bernoulli::new(p).unwrap());
+        Self { p, dist }
+    }
+    pub fn new_rand(r: &mut ThreadRng) -> Self {
         let p: [f64; K] = (0..K)
             .map(|_| r.gen_range(0.0..1.0))
             .collect::<Vec<f64>>()
             .try_into()
             .unwrap();
-        let dist = p
-            .iter()
-            .map(|&p| Bernoulli::new(p).unwrap())
-            .collect::<Vec<Bernoulli>>()
-            .try_into()
-            .unwrap();
-        State { p, dist }
+
+        Self::new(p)
     }
 }
 
@@ -319,17 +318,19 @@ where
 
 fn main() {
     const K: usize = 2;
-    const N: u8 = 100;
+    type Size = u16;
+    const N: Size = 300;
 
     let mut r = ThreadRng::default();
     let state = State::<K>::new_rand(&mut r);
+    // let state = State::<K>::new([0.11955076742693227, 0.14036044660466196]);
     eprintln!("{:#?}", state.p);
     let params = Params {
         alpha: 1.,
         beta: 1.,
     };
 
-    let mut belief = Belief::<u8, K>([Default::default(); K]);
+    let mut belief = Belief::<Size, K>([Default::default(); K]);
 
     let t0 = std::time::Instant::now();
     // let value = Belief::value_iteration(N, 5., params);
