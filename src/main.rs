@@ -239,7 +239,7 @@ where
             for state in states.iter() {
                 let mut new_reward = 0.;
                 if n == state.n() {
-                    new_reward += state.q(&value, params).1;
+                    new_reward += state.best_action_from_map(&value, params).1;
                 }
 
                 let old_reward = value.insert(state, new_reward).unwrap();
@@ -265,7 +265,7 @@ where
         match value.get(self).copied() {
             Some(reward) => reward,
             None => {
-                let (_, reward) = self.q_with_lookahead(
+                let (_, reward) = self.best_action_with_lookahead(
                     |new_belief| new_belief.dynamic_search_recurse(n - I::one(), params, value),
                     params,
                 );
@@ -286,17 +286,17 @@ where
         value
     }
 
-    fn q<T>(&self, value: &BTreeMap<T, f64>, params: Params) -> (usize, f64)
+    fn best_action_from_map<T>(&self, value: &BTreeMap<T, f64>, params: Params) -> (usize, f64)
     where
         T: Borrow<Self> + Ord,
     {
-        self.q_with_lookahead(
+        self.best_action_with_lookahead(
             |new_belief| value.get(new_belief.borrow()).copied().unwrap_or(0.),
             params,
         )
     }
 
-    fn q_with_lookahead<F>(&self, mut lookahead: F, params: Params) -> (usize, f64)
+    fn best_action_with_lookahead<F>(&self, mut lookahead: F, params: Params) -> (usize, f64)
     where
         F: FnMut(&Self) -> f64,
     {
@@ -337,7 +337,7 @@ fn main() {
 
     let mut score = 0;
     for n in 0..N {
-        let (action, expected_reward) = belief.q(&value, params);
+        let (action, expected_reward) = belief.best_action_from_map(&value, params);
 
         let expected_score = score as f64 + expected_reward;
         let outcome = belief.take(action, &state, &mut r);
