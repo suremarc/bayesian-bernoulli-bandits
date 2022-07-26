@@ -375,27 +375,28 @@ where
 
 fn main() {
     const K: usize = 2;
-    type Size = u16;
-    const N: Size = 100;
+    type Size = u8;
+    const N: Size = 200;
     const I: usize = 10000;
 
     let mut r = ThreadRng::default();
-    // let state = State::<K>::new_rand(&mut r);
-    let state = State::<K>::new([0.8341146271245636, 0.7968395308492424]);
+    let state = State::<K>::new_rand(&mut r);
+    // let state = State::<K>::new([0.17677065765040756, 0.0490376552181202]);
     eprintln!("{:#?}", state.p);
     let prior = Prior {
         alpha: 1.,
         beta: 1.,
     };
 
-    let belief = Belief::<Size, K>([Default::default(); K]);
+    let belief_prior = Belief::<Size, K>([Default::default(); K]);
     // let value = Belief::value_iteration(N, 5., prior, |_| 0.);
-    let value = belief.dynamic_search(N, prior);
+    let value = belief_prior.dynamic_search(N, prior);
 
     let t0 = std::time::Instant::now();
     let mut average_score: f64 = 0.;
+    let mut average_score_greedy: f64 = 0.;
     for _ in 0..I {
-        let mut belief = belief.clone();
+        let mut belief = belief_prior.clone();
 
         let mut score = 0;
         for _ in 0..N {
@@ -410,20 +411,23 @@ fn main() {
             // eprintln!("{n}: ({action}, {expected_score:.2}) -> {outcome} ({score})");
         }
 
-        // eprintln!(
-        //     "# of states: idk ({}ms)\ngot {:.2}%",
-        //     // value.len(),
-        //     // value.len(),
-        //     t0.elapsed().as_millis(),
-        //     score as f64 / (N as f64) * 100.,
-        // );
-
         average_score += score as f64;
+
+        let mut belief = belief_prior.clone();
+        let mut score = 0;
+        for _ in 0..N {
+            let (action, _) = belief.best_action_epsilon_greedy(0.05, prior, &mut r);
+            let outcome = belief.take(action, &state, &mut r);
+            score += outcome as u64;
+        }
+
+        average_score_greedy += score as f64;
     }
 
     average_score /= I as f64;
+    average_score_greedy /= I as f64;
     eprintln!(
-        "average score: {average_score} ({}ms/{I} iterations)",
+        "average score: {average_score}\ngreedy: {average_score_greedy}\n({}ms/{I} iterations)",
         t0.elapsed().as_millis()
     );
 }
