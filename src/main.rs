@@ -177,7 +177,7 @@ impl<const K: usize> State<K> {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Params {
+pub struct Prior {
     pub alpha: f64,
     pub beta: f64,
 }
@@ -205,15 +205,31 @@ where
     }
 
     #[inline(always)]
-    fn success_chance(&self, action: usize, params: Params) -> f64 {
+    fn sample_beta(&self, action: usize, prior: Prior, r: &mut ThreadRng) -> f64 {
+        let alpha_recip = (prior.alpha + self.0[action].successes.into()).recip();
+        let beta_recip = (prior.beta + self.0[action].failures.into()).recip();
+        let (mut rv1, mut rv2): (f64, f64) = Default::default();
+
+        loop {
+            rv1 = r.gen::<f64>().powf(alpha_recip);
+            rv2 = r.gen::<f64>().powf(beta_recip);
+
+            if rv1 + rv2 <= 1. {
+                return rv1 / (rv1 + rv2);
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn success_chance(&self, action: usize, prior: Prior) -> f64 {
         let dist = self.0[action];
-        (params.alpha + dist.successes.into())
-            / ((dist.successes + dist.failures).into() + params.alpha + params.beta)
+        (prior.alpha + dist.successes.into())
+            / ((dist.successes + dist.failures).into() + prior.alpha + prior.beta)
     }
 
     #[inline]
-    fn possible_transitions(&self, action: usize, params: Params) -> [(f64, Self); 2] {
-        let p = self.success_chance(action, params);
+    fn possible_transitions(&self, action: usize, prior: Prior) -> [(f64, Self); 2] {
+        let p = self.success_chance(action, prior);
         [(true, p), (false, 1. - p)].map(|(outcome, prob)| {
             let mut new = self.clone();
             new.0[action] = new.0[action].update(outcome);
@@ -224,7 +240,7 @@ where
     pub fn value_iteration(
         n: I,
         epsilon: f64,
-        params: Params,
+        prior: Prior,
         orig: impl Fn(&Self) -> f64,
     ) -> BTreeMap<Self, f64>
     where
@@ -244,7 +260,7 @@ where
             for state in states.iter() {
                 let mut new_reward = 0.;
                 if n == state.n() {
-                    new_reward += state.best_action_from_map(&value, params).1;
+                    new_reward += state.best_action_from_map(&value, prior).1;
                 }
 
                 let old_reward = value.insert(state, new_reward).unwrap();
@@ -262,7 +278,7 @@ where
             .collect()
     }
 
-    fn dynamic_search_recurse(&self, n: I, params: Params, value: &mut BTreeMap<Self, f64>) -> f64 {
+    fn dynamic_search_recurse(&self, n: I, prior: Prior, value: &mut BTreeMap<Self, f64>) -> f64 {
         if n.is_zero() {
             return 0.;
         }
@@ -271,8 +287,8 @@ where
             Some(reward) => reward,
             None => {
                 let (_, reward) = self.best_action_with_lookahead(
-                    |new_belief| new_belief.dynamic_search_recurse(n - I::one(), params, value),
-                    params,
+                    |new_belief| new_belief.dynamic_search_recurse(n - I::one(), prior, value),
+                    prior,
                 );
 
                 value.insert(self.clone(), reward);
@@ -281,38 +297,72 @@ where
         }
     }
 
-    pub fn dynamic_search(&self, n: I, params: Params) -> BTreeMap<Self, f64>
+    pub fn dynamic_search(&self, n: I, prior: Prior) -> BTreeMap<Self, f64>
     where
         I: Into<usize>,
     {
         let mut value = BTreeMap::new();
-        self.dynamic_search_recurse(n, params, &mut value);
+        self.dynamic_search_recurse(n, prior, &mut value);
 
         value
     }
 
-    fn best_action_from_map<T>(&self, value: &BTreeMap<T, f64>, params: Params) -> (usize, f64)
+    pub fn best_action_epsilon_greedy(
+        &self,
+        epsilon: f64,
+        prior: Prior,
+        r: &mut ThreadRng,
+    ) -> (usize, f64) {
+        if r.gen::<f64>() > epsilon {
+            self.best_action_with_lookahead(|_| 0., prior)
+        } else {
+            let action = r.gen_range(0..K);
+            (action, self.success_chance(action, prior))
+        }
+    }
+
+    pub fn best_action_ucb(&self, n: I, prior: Prior) -> (usize, f64) {
+        (0..K)
+            .map(|action| {
+                (
+                    action,
+                    self.success_chance(action, prior)
+                        + (2. * (n.into()).ln() / (self.0[action].n().into())).sqrt(),
+                )
+            })
+            .max_by_key(|&(_, reward)| OrderedFloat::from(reward))
+            .unwrap()
+    }
+
+    pub fn best_action_thompson(&self, prior: Prior, r: &mut ThreadRng) -> (usize, f64) {
+        (0..K)
+            .map(|action| (action, self.sample_beta(action, prior, r)))
+            .max_by_key(|&(_, reward)| OrderedFloat::from(reward))
+            .unwrap()
+    }
+
+    fn best_action_from_map<T>(&self, value: &BTreeMap<T, f64>, prior: Prior) -> (usize, f64)
     where
         T: Borrow<Self> + Ord,
     {
         self.best_action_with_lookahead(
             |new_belief| value.get(new_belief.borrow()).copied().unwrap_or(0.),
-            params,
+            prior,
         )
     }
 
     fn best_action_with_lookahead(
         &self,
         mut lookahead: impl FnMut(&Self) -> f64,
-        params: Params,
+        prior: Prior,
     ) -> (usize, f64) {
         (0..K)
             .map(|action| {
                 (
                     action,
-                    self.success_chance(action, params)
+                    self.success_chance(action, prior)
                         + self
-                            .possible_transitions(action, params)
+                            .possible_transitions(action, prior)
                             .map(|(prob, new_belief)| prob * lookahead(&new_belief))
                             .iter()
                             .sum::<f64>(),
@@ -324,15 +374,15 @@ where
 }
 
 fn main() {
-    const K: usize = 2;
+    const K: usize = 3;
     type Size = u16;
-    const N: Size = 300;
+    const N: Size = 100;
 
     let mut r = ThreadRng::default();
     let state = State::<K>::new_rand(&mut r);
     // let state = State::<K>::new([0.8341146271245636, 0.7968395308492424]);
     eprintln!("{:#?}", state.p);
-    let params = Params {
+    let prior = Prior {
         alpha: 1.,
         beta: 1.,
     };
@@ -340,22 +390,25 @@ fn main() {
     let mut belief = Belief::<Size, K>([Default::default(); K]);
 
     let t0 = std::time::Instant::now();
-    let value = Belief::value_iteration(N, 5., params, |_| 0.);
-    // let value = belief.dynamic_search(N, params);
+    // let value = Belief::value_iteration(N, 5., prior, |_| 0.);
+    // let value = belief.dynamic_search(N, prior);
 
     let mut score = 0;
     for n in 0..N {
-        let (action, expected_reward) = belief.best_action_from_map(&value, params);
+        // let (action, expected_reward) = belief.best_action_from_map(&value, prior);
+        // let (action, expected_reward) = belief.best_action_epsilon_greedy(0.05, prior, &mut r);
+        // let (action, expected_reward) = belief.best_action_ucb(n, prior);
+        let (action, expected_reward) = belief.best_action_thompson(prior, &mut r);
 
         let expected_score = score as f64 + expected_reward;
         let outcome = belief.take(action, &state, &mut r);
         score += outcome as u64;
-        eprintln!("{n}: ({action}, {expected_score:.2}) -> {outcome} ({score})");
+        // eprintln!("{n}: ({action}, {expected_score:.2}) -> {outcome} ({score})");
     }
 
     eprintln!(
-        "# of states: {} ({}ms)\n got {:.2}%",
-        value.len(),
+        "# of states: idk ({}ms)\n got {:.2}%",
+        // value.len(),
         // value.len(),
         t0.elapsed().as_millis(),
         score as f64 / (N as f64) * 100.,
