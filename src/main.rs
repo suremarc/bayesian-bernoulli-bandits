@@ -208,7 +208,7 @@ where
     fn sample_beta(&self, action: usize, prior: Prior, r: &mut ThreadRng) -> f64 {
         let alpha_recip = (prior.alpha + self.0[action].successes.into()).recip();
         let beta_recip = (prior.beta + self.0[action].failures.into()).recip();
-        let (mut rv1, mut rv2): (f64, f64) = Default::default();
+        let (mut rv1, mut rv2): (f64, f64);
 
         loop {
             rv1 = r.gen::<f64>().powf(alpha_recip);
@@ -374,43 +374,56 @@ where
 }
 
 fn main() {
-    const K: usize = 3;
+    const K: usize = 2;
     type Size = u16;
     const N: Size = 100;
+    const I: usize = 10000;
 
     let mut r = ThreadRng::default();
-    let state = State::<K>::new_rand(&mut r);
-    // let state = State::<K>::new([0.8341146271245636, 0.7968395308492424]);
+    // let state = State::<K>::new_rand(&mut r);
+    let state = State::<K>::new([0.8341146271245636, 0.7968395308492424]);
     eprintln!("{:#?}", state.p);
     let prior = Prior {
         alpha: 1.,
         beta: 1.,
     };
 
-    let mut belief = Belief::<Size, K>([Default::default(); K]);
+    let belief = Belief::<Size, K>([Default::default(); K]);
+    // let value = Belief::value_iteration(N, 5., prior, |_| 0.);
+    let value = belief.dynamic_search(N, prior);
 
     let t0 = std::time::Instant::now();
-    // let value = Belief::value_iteration(N, 5., prior, |_| 0.);
-    // let value = belief.dynamic_search(N, prior);
+    let mut average_score: f64 = 0.;
+    for _ in 0..I {
+        let mut belief = belief.clone();
 
-    let mut score = 0;
-    for n in 0..N {
-        // let (action, expected_reward) = belief.best_action_from_map(&value, prior);
-        // let (action, expected_reward) = belief.best_action_epsilon_greedy(0.05, prior, &mut r);
-        // let (action, expected_reward) = belief.best_action_ucb(n, prior);
-        let (action, expected_reward) = belief.best_action_thompson(prior, &mut r);
+        let mut score = 0;
+        for _ in 0..N {
+            let (action, _) = belief.best_action_from_map(&value, prior);
+            // let (action, expected_reward) = belief.best_action_epsilon_greedy(0.05, prior, &mut r);
+            // let (action, expected_reward) = belief.best_action_ucb(n, prior);
+            // let (action, expected_reward) = belief.best_action_thompson(prior, &mut r);
 
-        let expected_score = score as f64 + expected_reward;
-        let outcome = belief.take(action, &state, &mut r);
-        score += outcome as u64;
-        // eprintln!("{n}: ({action}, {expected_score:.2}) -> {outcome} ({score})");
+            // let expected_score = score as f64 + expected_reward;
+            let outcome = belief.take(action, &state, &mut r);
+            score += outcome as u64;
+            // eprintln!("{n}: ({action}, {expected_score:.2}) -> {outcome} ({score})");
+        }
+
+        // eprintln!(
+        //     "# of states: idk ({}ms)\ngot {:.2}%",
+        //     // value.len(),
+        //     // value.len(),
+        //     t0.elapsed().as_millis(),
+        //     score as f64 / (N as f64) * 100.,
+        // );
+
+        average_score += score as f64;
     }
 
+    average_score /= I as f64;
     eprintln!(
-        "# of states: idk ({}ms)\n got {:.2}%",
-        // value.len(),
-        // value.len(),
-        t0.elapsed().as_millis(),
-        score as f64 / (N as f64) * 100.,
+        "average score: {average_score} ({}ms/{I} iterations)",
+        t0.elapsed().as_millis()
     );
 }
